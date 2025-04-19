@@ -11,7 +11,7 @@ lazy val root = (project in file("."))
       "dev.zio" %% "zio" % zioVersion,
       "dev.zio" %% "zio-http" % zioVersion,
 
-      "org.gnieh" % "tekstlib_2.12" % "0.1.1"  // rope library
+      "org.gnieh" % "tekstlib_2.12" % "0.1.1"  // rope library (based in scala 2.12)
 
     )
   )
