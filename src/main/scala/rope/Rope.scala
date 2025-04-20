@@ -17,8 +17,7 @@ and modified in a way that it is now compatible with scala 3
 * See the License for the specific language governing permissions and
 * limitations under the License.
 */
-//package gnieh
-//package string
+
 package rope
 
 /** Rope data structure as a binary tree of character arrays.
@@ -90,10 +89,10 @@ sealed abstract class Rope {
   def isBalanced: Boolean
 
   def toList: List[Array[Char]]
-
 }
 
 object Rope {
+  final val nodeMaxLength = 1024
 
   /** Creates a rope from a string */
   def apply(s: String): Rope =
@@ -103,7 +102,7 @@ object Rope {
   def apply(a: Array[Char]): Rope =
     if (a == null || a.isEmpty) {
       RopeEmpty
-    } else if (a.length > 2048) {
+    } else if (a.length > nodeMaxLength) {
       val (a1, a2) = a.splitAt(a.length / 2)
       Rope(a1) + Rope(a2)
     } else {
@@ -213,7 +212,7 @@ private final case class RopeConcat(left: Rope, right: Rope) extends Rope {
     (right, that) match {
       case (_, RopeEmpty) =>
         this
-      case (RopeLeaf(rightValue), RopeLeaf(thatValue)) if rightValue.length + thatValue.length <= 2048 =>
+      case (RopeLeaf(rightValue), RopeLeaf(thatValue)) if rightValue.length + thatValue.length <= Rope.nodeMaxLength =>
         Rope.balance(left + Rope(rightValue ++ thatValue))
       case _ =>
         Rope.balance(RopeConcat(this, that))
@@ -270,7 +269,7 @@ private final case class RopeLeaf(value: Array[Char]) extends Rope {
     that match {
       case RopeEmpty =>
         this
-      case RopeLeaf(thatValue) if this.value.length + thatValue.length <= 2048 =>
+      case RopeLeaf(thatValue) if this.value.length + thatValue.length <= Rope.nodeMaxLength =>
         Rope(this.value ++ thatValue)
       case _ =>
         Rope.balance(RopeConcat(this, that))
