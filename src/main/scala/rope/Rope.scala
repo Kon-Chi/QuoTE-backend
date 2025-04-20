@@ -190,8 +190,8 @@ private final case class RopeConcat(left: Rope, right: Rope) extends Rope {
   def charAt(idx: Int): Char =
     if (idx < 0)
       throw new StringIndexOutOfBoundsException(f"String index out of range: $idx")
-    else if (idx >= size)
-      right.charAt(idx - size)
+    else if (idx >= left.size)
+      right.charAt(idx - left.size)
     else
       left.charAt(idx)
 
