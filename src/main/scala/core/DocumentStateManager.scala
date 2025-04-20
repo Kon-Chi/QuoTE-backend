@@ -1,6 +1,6 @@
 package core
 
-import gnieh.string.Rope
+import rope.Rope
 
 object DocumentStateManager {
   private val rope = Rope("") 
