@@ -16,9 +16,6 @@ lazy val root = (project in file("."))
       "io.circe" %% "circe-core" % circeVersion,
       "io.circe" %% "circe-generic" % circeVersion,
       "io.circe" %% "circe-parser" % circeVersion,
-
-      "org.gnieh" % "tekstlib_2.12" % "0.1.1"  // rope library (based in scala 2.12)
-
     )
   )
 
