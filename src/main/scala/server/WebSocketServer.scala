@@ -4,25 +4,24 @@ import zio.http.*
 import zio.*
 
 import io.circe.parser.*
-import io.circe.Json
 
 import protocol.*
 
-
 object WebSocketServer extends ZIOAppDefault {
+  private final val queueSize = 1000
   private val socketApp = Handler.webSocket { channel =>
-    channel.receiveAll {
-      case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
-        decode[Operation](jsonString) match {
-          case op: AddString => // call handler 
-          case op: RemoveNCharacters => // call handler
-          case op: Undo => // call handler
-          case op: Redo => // call handler
-        }
+    for {
+      queue <- Queue.bounded(queueSize)
+      _ <- channel.receiveAll {
+        case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
+          for {
+            op <- ZIO.fromEither(decode[Operation](jsonString))
+            _ <- queue.offer(op)
+          } yield ()
 
-      case _ =>
-        ZIO.unit
-    }
+        case _ => ZIO.unit
+      }
+    } yield ()
   }
 
   private val routes = Routes(
