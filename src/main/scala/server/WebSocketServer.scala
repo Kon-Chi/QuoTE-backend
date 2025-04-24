@@ -11,7 +11,7 @@ object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
   private val socketApp = Handler.webSocket { channel =>
     for {
-      queue <- Queue.bounded(queueSize)
+      queue: Queue[Operation] <- Queue.bounded(queueSize)
       _ <- channel.receiveAll {
         case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
           for {
