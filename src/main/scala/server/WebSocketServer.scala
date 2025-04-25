@@ -5,7 +5,7 @@ import zio.*
 
 import io.circe.parser.*
 
-import protocol.*
+import quote.ot.*
 
 object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
