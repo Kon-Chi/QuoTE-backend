@@ -4,3 +4,4 @@
 .metals/
 target/
 project/
+.scalafmt.conf
