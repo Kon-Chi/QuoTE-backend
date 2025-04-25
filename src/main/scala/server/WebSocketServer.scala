@@ -35,8 +35,20 @@ object WebSocketServer extends ZIOAppDefault {
     } yield ()
   }
 
-  private def routes(queue: Queue[UserOperations]) = Routes(
-    Method.GET / "updates" -> handler(socketApp(queue).toResponse)
+  private def notifyClients(currentId: UUID, refClients: RefClients, ops: List[Operation]): Task[Unit] = {
+    for {
+      clients <- refClients.get
+      filteredClients = clients.filter{(id, _) => id != currentId}
+      _ <- ZIO.foreach(filteredClients)(
+        (_, channel) => channel.send(
+          ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
+        )
+      )
+    } yield ()
+  }
+
+  private def routes(queue: Queue[UserOperations], clients: RefClients) = Routes(
+    Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
   )
 
   override val run: ZIO[Any, Throwable, Nothing] = for {
