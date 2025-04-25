@@ -41,5 +41,4 @@ def applyOp(op: Operation)(text: String): Either[OpError, String] =
     case Delete(index, len) => 
       if len > text.size || index < 0 || index >= text.size then Left("Failed to apply Delete operation")
       else Right(text.take(index) + text.drop(index + len))
-    case _ => Left("Unexpected operaion appeared")
 
