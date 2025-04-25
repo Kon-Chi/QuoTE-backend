@@ -3,21 +3,23 @@ package server
 import zio.http.*
 import zio.*
 
+import java.util.UUID
+
 import io.circe.parser.*
 
-import quote.ot.*
+import models.*
 
 type OpError = String
 
 object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
-  private val socketApp = Handler.webSocket { channel =>
+  private def socketApp(queue: Queue[UserOperations]) = Handler.webSocket { channel =>
     for {
-      queue: Queue[Operation] <- Queue.bounded(queueSize)
+      clientId <- Random.nextUUID.map(_.toString)
       _ <- channel.receiveAll {
         case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
           for {
-            op <- ZIO.fromEither(decode[Operation](jsonString))
+            op <- ZIO.fromEither(decode[UserOperations](jsonString))
             _ <- queue.offer(op)
           } yield ()
 
@@ -26,11 +28,14 @@ object WebSocketServer extends ZIOAppDefault {
     } yield ()
   }
 
-  private val routes = Routes(
-    Method.GET / "updates" -> handler(socketApp.toResponse)
+  private def routes(queue: Queue[UserOperations]) = Routes(
+    Method.GET / "updates" -> handler(socketApp(queue).toResponse)
   )
 
-  override val run: ZIO[Any, Throwable, Nothing] = Server.serve(routes).provide(Server.default)
+  override val run: ZIO[Any, Throwable, Nothing] = for {
+    queue: Queue[UserOperations] <- Queue.bounded(queueSize)
+    server <- Server.serve(routes(queue)).provide(Server.default)
+  } yield server
 }
 
 def applyOp(op: Operation)(text: String): Either[OpError, String] =
