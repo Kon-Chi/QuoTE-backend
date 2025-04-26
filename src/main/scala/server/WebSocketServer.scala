@@ -1,5 +1,7 @@
 package server
 
+import scala.util.{Random => sRandom} // only for generation test text
+
 import zio.http.*
 import zio.*
 
@@ -12,6 +14,7 @@ import io.circe.parser.*
 
 import models.*
 import quote.ot.*
+import java.nio.file.attribute.UserPrincipal
 
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
@@ -51,12 +54,28 @@ object WebSocketServer extends ZIOAppDefault {
     Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
   )
 
-  override val run: ZIO[Any, Throwable, Nothing] = for {
+  override val run: ZIO[Any, Throwable, Unit] = for {
     queue: Queue[UserOperations] <- Queue.bounded(queueSize)
     clients: RefClients <- Ref.make(List.empty)
-    server <- Server.serve(routes(queue, clients)).provide(Server.default)
-  } yield server
+    _ <- Server.serve(routes(queue, clients)).provide(Server.default).fork
+    _ <- opProcess(queue, clients)
+  } yield ()
 }
+
+def opProcess(queue: Queue[UserOperations], clients: RefClients): UIO[Nothing] = 
+  for {
+    queueSize <- queue.size
+    testText <- Ref.make((0 until queueSize).foldLeft("")((acc, _) => 
+        acc + sRandom.shuffle(List(" ", (sRandom.nextInt(26) + 'a').toChar.toString).head)))
+    (userId, op) <- queue.take
+    _ <- ops.foreach {
+      op => for {
+        text <- ref.get
+        _ <- ref.update(applyOp(op)(text))
+      } yield ()
+    }
+    _ <- notifyClients(userId, clients, ops)
+  } yield ()
 
 def applyOp(op: Operation)(text: String): Either[OpError, String] =
   op match
