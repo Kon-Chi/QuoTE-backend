@@ -15,30 +15,46 @@ import quote.ot.*
 
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
+type UserOps = Queue[UserOperations]
+type Env = UserOps & RefClients
 
 object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
-  private def socketApp(queue: Queue[UserOperations], clients: RefClients) = Handler.webSocket { channel =>
+
+  private def socketApp(
+                         //                         queue: Queue[UserOperations],
+                         //                         clients: RefClients
+                       ): ZIO[Env, Throwable, WebSocketApp[Any]] =
     for {
-      clientId <- Random.nextUUID
-      _ <- clients.update((clientId, channel) :: _)
+      queue <- ZIO.service[UserOps]
+      clients <- ZIO.service[RefClients]
 
-      _ <- channel.receiveAll {
-        case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
-          for {
-            op <- ZIO.fromEither(decode[UserOperations](jsonString))
-            _ <- queue.offer(op)
-          } yield ()
+      handler <- ZIO.succeed(Handler.webSocket { channel =>
+        for {
 
-        case _ => ZIO.unit
-      }
-    } yield ()
-  }
+          clientId <- Random.nextUUID
+          _ <- clients.update((clientId, channel) :: _)
 
-  private def notifyClients(currentId: UUID, refClients: RefClients, ops: List[Operation]): Task[Unit] = {
+          _ <- channel.receiveAll {
+            case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
+              for {
+                op <- ZIO.fromEither(decode[UserOperations](jsonString))
+                _ <- queue.offer(op)
+              } yield ()
+
+            case _ => ZIO.unit
+          }
+        } yield ()
+      })
+    } yield handler
+
+
+  private def notifyClients(currentId: UUID, ops: List[Operation]): ZIO[Env, Throwable, Unit] = {
     for {
+      queue <- ZIO.service[UserOps]
+      refClients <- ZIO.service[RefClients]
       clients <- refClients.get
-      filteredClients = clients.filter{(id, _) => id != currentId}
+      filteredClients = clients.filter { (id, _) => id != currentId }
       _ <- ZIO.foreach(filteredClients)(
         (_, channel) => channel.send(
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
@@ -47,15 +63,26 @@ object WebSocketServer extends ZIOAppDefault {
     } yield ()
   }
 
-  private def routes(queue: Queue[UserOperations], clients: RefClients) = Routes(
-    Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
-  )
+  private def routes(): ZIO[Env, Throwable, Routes[Any, Nothing]] = for {
+    app <- socketApp()
+    routes = Routes(
+      Method.GET / "updates" -> handler(app.toResponse)
+    )
+  } yield routes
 
-  override val run: ZIO[Any, Throwable, Nothing] = for {
-    queue: Queue[UserOperations] <- Queue.bounded(queueSize)
-    clients: RefClients <- Ref.make(List.empty)
-    server <- Server.serve(routes(queue, clients)).provide(Server.default)
-  } yield server
+  override val run: URIO[Any, ExitCode] = {
+    val queueLayer = ZLayer.fromZIO(Queue.bounded[UserOperations](queueSize))
+    val clientsLayer = ZLayer.fromZIO(Ref.make(List.empty[(UUID, WebSocketChannel)]))
+
+    val appLayer = queueLayer ++ clientsLayer ++ Server.default
+
+    val serverProgram = for {
+      appRoutes <- routes()
+      _ <- Server.serve(appRoutes)
+    } yield ()
+
+    serverProgram.provideLayer(appLayer).exitCode
+  }
 }
 
 def applyOp(op: Operation)(text: String): Either[OpError, String] =
