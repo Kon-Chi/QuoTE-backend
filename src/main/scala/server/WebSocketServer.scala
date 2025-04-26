@@ -54,6 +54,25 @@ object WebSocketServer extends ZIOAppDefault {
     Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
   )
 
+  private def opProcess(queue: Queue[UserOperations], clients: RefClients): IO[IllegalArgumentException, String] =
+    for {
+      queueSize <- queue.size
+      testText <- Ref.make((0 until queueSize).foldLeft("")((acc, _) =>
+        acc + sRandom.shuffle(List(" ", (sRandom.nextInt(26) + 'a').toChar.toString).head)))
+      taken <- queue.take
+      UserOperations(userId, ops) = taken
+      _ <- ZIO.foreach(ops) {
+        op => for {
+          curText <- testText.get
+          updText <- ZIO.fromEither(applyOp(op)(curText))
+            .mapError(errorMsg => new IllegalArgumentException(errorMsg))
+          _ <- testText.set(updText)
+        } yield ()
+      }
+      // _ <- notifyClients(userId, clients, ops)
+      updText <- testText.get
+    } yield updText
+
   override val run: ZIO[Any, Throwable, Unit] = for {
     queue: Queue[UserOperations] <- Queue.bounded(queueSize)
     clients: RefClients <- Ref.make(List.empty)
@@ -61,21 +80,6 @@ object WebSocketServer extends ZIOAppDefault {
     _ <- opProcess(queue, clients)
   } yield ()
 }
-
-def opProcess(queue: Queue[UserOperations], clients: RefClients): UIO[Nothing] = 
-  for {
-    queueSize <- queue.size
-    testText <- Ref.make((0 until queueSize).foldLeft("")((acc, _) => 
-        acc + sRandom.shuffle(List(" ", (sRandom.nextInt(26) + 'a').toChar.toString).head)))
-    (userId, op) <- queue.take
-    _ <- ops.foreach {
-      op => for {
-        text <- ref.get
-        _ <- ref.update(applyOp(op)(text))
-      } yield ()
-    }
-    _ <- notifyClients(userId, clients, ops)
-  } yield ()
 
 def applyOp(op: Operation)(text: String): Either[OpError, String] =
   op match
