@@ -4,24 +4,23 @@ import zio.http.*
 import zio.*
 
 import io.circe.*
+import io.circe.parser.*
 import io.circe.syntax.*
 
 import java.util.UUID
-
-import io.circe.parser.*
 
 import models.*
 import quote.ot.*
 
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
-type UserOps = Queue[UserOperations]
-type Env = UserOps & RefClients
+type ClientOps = Queue[ClientOperations]
+type Env = ClientOps & RefClients
 
 object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
 
-  private def socketApp(queue: UserOps, clients: RefClients): WebSocketApp[Any] =
+  private def socketApp(queue: ClientOps, clients: RefClients): WebSocketApp[Any] =
     Handler.webSocket { channel =>
       for {
         clientId <- Random.nextUUID
@@ -30,8 +29,8 @@ object WebSocketServer extends ZIOAppDefault {
         _ <- channel.receiveAll {
           case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
             for {
-              op <- ZIO.fromEither(decode[UserOperations](jsonString))
-              _ <- queue.offer(op)
+              input <- ZIO.fromEither(decode[ClientInput](jsonString))
+              _ <- queue.offer(input.toClientOperations(clientId))
             } yield ()
 
           case _ => ZIO.unit
@@ -41,7 +40,7 @@ object WebSocketServer extends ZIOAppDefault {
 
   private def notifyClients(currentId: UUID, ops: List[Operation]): ZIO[Env, Throwable, Unit] = {
     for {
-      queue <- ZIO.service[UserOps]
+      queue <- ZIO.service[ClientOps]
       refClients <- ZIO.service[RefClients]
       clients <- refClients.get
       filteredClients = clients.filter { (id, _) => id != currentId }
@@ -53,13 +52,13 @@ object WebSocketServer extends ZIOAppDefault {
     } yield ()
   }
 
-  private def routes(queue: UserOps, clients: RefClients): Routes[Any, Nothing] =
+  private def routes(queue: ClientOps, clients: RefClients): Routes[Any, Nothing] =
     Routes(
       Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
     )
 
   override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
-    queue <- Queue.bounded[UserOperations](queueSize)
+    queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
