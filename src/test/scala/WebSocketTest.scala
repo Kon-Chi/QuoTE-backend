@@ -12,8 +12,10 @@ object WebSocketTest extends ZIOAppDefault {
 
   def processQueue(channel: WebSocketChannel): ZIO[Queue[String], Throwable, Unit] = {
     for {
+      _ <- Console.printLine("in processQueue")
       queue <- ZIO.service[Queue[String]]
       msg   <- queue.take
+      _ <- Console.printLine(msg)
       _     <- channel.send(Read(WebSocketFrame.Text(msg)))
     } yield ()
   }.forever.forkDaemon.unit
@@ -29,7 +31,7 @@ object WebSocketTest extends ZIOAppDefault {
             ZIO.unit
         }
       } yield ()
-    }.connect("ws://localhost:8080/subscriptions")
+    }.connect("ws://localhost:8080/updates")
 
   @nowarn("msg=dead code")
   override val run =
