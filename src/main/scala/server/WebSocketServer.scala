@@ -72,7 +72,9 @@ object WebSocketServer extends ZIOAppDefault:
           then ZIO.fail(new Throwable("Invalid document revision"))
           else ZIO.succeed(ops.take(rev - clientRev))
       transformedClientOps =
-        concurrentOps.foldLeft(clientsOps) {(acc, xs) => transform(xs, acc)._2}
+        concurrentOps.foldLeft(clientsOps) {
+          (acc, xs) => OperationalTransformation.transform(xs, acc)._2
+        }
       newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
         (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_))
       }
@@ -101,30 +103,11 @@ object WebSocketServer extends ZIOAppDefault:
   yield exitCode
 
 
-def applyOp(op: Operation, text: Document): Either[OpError, Document] =
-  op match
-    case Insert(index, str) =>
-      if index >= text.length || index < 0 then Left("Failed to apply Insert operation")
-      else Right(text.take(index) + str + text.drop(index))
-    case Delete(index, len) =>
-      if len > text.length || index < 0 || index >= text.length then Left("Failed to apply Delete operation")
-      else Right(text.take(index) + text.drop(index + len))
+def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
+  case Insert(index, str) => if index >= text.length || index < 0
+    then Left("Failed to apply Insert operation")
+    else Right(text.take(index) + str + text.drop(index))
+  case Delete(index, len) => if len > text.length || index < 0 || index >= text.length
+    then Left("Failed to apply Delete operation")
+    else Right(text.take(index) + text.drop(index + len))
 
-def transform = transformList2 // to move into OT package
-
-def transformList1(o: Operation, ps: List[Operation]): (Operation, List[Operation]) =
-  ps match
-    case Nil => (o, Nil)
-    case p :: psTail =>
-      val (o1, p1) = OperationalTransformation.transform(o, p)
-      val (o2, ps1) = transformList1(o1, psTail)
-      (o2, p1 :: ps1)
-
-
-def transformList2(os: List[Operation], ps: List[Operation]): (List[Operation], List[Operation]) =
-  os match
-    case Nil => (Nil, ps)
-    case o :: osTail =>
-      val (o1,  ps1) = transformList1(o, ps)
-      val (os1, ps2) = transformList2(osTail, ps1)
-      (o1 :: os1, ps2)

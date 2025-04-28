@@ -6,7 +6,7 @@ val zioHttpVersion = "3.2.0"
 val zioVersion = "2.1.17"
 val circeVersion = "0.14.12"
 
-lazy val quote_ot = RootProject(uri("https://github.com/Kon-Chi/QuoTE-OT.git#4abe4ec7d24661180e9235d1585ebff0b60379e0"))
+lazy val quote_ot = RootProject(uri("https://github.com/Kon-Chi/QuoTE-OT.git#ee4dce0c5afe7cf2d22f5692aa7a80439bc8a40d"))
 
 lazy val root = (project in file("."))
   .dependsOn(quote_ot)
