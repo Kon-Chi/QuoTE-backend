@@ -9,14 +9,16 @@ import io.circe.syntax.*
 
 import java.util.UUID
 
-import models.*
 import quote.ot.*
+import pieceTable.*
+
+import models.*
 
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
 type ClientOps = Queue[ClientOperations]
 type Revision = Int
-type Document = String
+type Document = PieceTable
 type ServerState = (Revision, Document, List[List[Operation]])
 type Env = ClientOps & RefClients & Ref[ServerState]
 
@@ -53,7 +55,6 @@ object WebSocketServer extends ZIOAppDefault:
       }
     yield ()
 
-
   private def routes(queue: ClientOps, clients: RefClients): Routes[Any, Nothing] =
     Routes(
       Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
@@ -85,7 +86,7 @@ object WebSocketServer extends ZIOAppDefault:
   override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for
     queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
-    serverState <- Ref.make[ServerState](0, " ", Nil) // I think we need init document fetching from db or smth
+    serverState <- Ref.make[ServerState](0, PieceTable(""), Nil) // I think we need init document fetching from db or smth
 
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
@@ -102,12 +103,11 @@ object WebSocketServer extends ZIOAppDefault:
       .exitCode
   yield exitCode
 
-
 def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
-  case Insert(index, str) => if index >= text.length || index < 0
+  case Insert(index, str) => if index > text.length || index < 0
     then Left("Failed to apply Insert operation")
-    else Right(text.take(index) + str + text.drop(index))
-  case Delete(index, len) => if len > text.length || index < 0 || index >= text.length
+    else Right({ text.insert(index, str); text })
+  case Delete(index, len) => if len - index > text.length || index < 0 || index > text.length
     then Left("Failed to apply Delete operation")
-    else Right(text.take(index) + text.drop(index + len))
+    else Right({ text.delete(index, len); text })
 
