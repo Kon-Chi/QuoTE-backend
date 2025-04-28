@@ -38,6 +38,9 @@ object WebSocketServer extends ZIOAppDefault:
               _ <- queue.offer(input.toClientOperations(clientId))
             yield ()
 
+          case ChannelEvent.Unregistered | ChannelEvent.Read(WebSocketFrame.Close(_, _)) =>
+            clients.update(_.filterNot(_._1 == clientId))
+
           case _ => ZIO.unit
         }
       yield ()
