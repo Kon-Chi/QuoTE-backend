@@ -63,21 +63,24 @@ object WebSocketServer extends ZIOAppDefault {
   override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
     queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
+    serverState <- Ref.make[ServerState](0, "", Nil) // I think we need init document fetching from db or smth
+
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
+    serverStateLayer = ZLayer.succeed(serverState)
 
-    appLayer = queueLayer ++ clientsLayer ++ Server.default
-    serverProgram =  Server.serve(routes(queue, clients))
+    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer ++ Server.default
+    serverProgram = Server.serve(routes(queue, clients)) // to add concurrency with fibers
     exitCode <- serverProgram.provideLayer(appLayer).exitCode
   } yield exitCode
 
-  private def opProcess(): ZIO[Env, Throwable, ServerState] =
+  private def opProcess(): ZIO[Env, Throwable, Unit] =
     for {
-      queue <- ZIO.service[ClientOps]
       serverState <- ZIO.service[Ref[ServerState]]
+      queue <- ZIO.service[ClientOps]
+      clientOpRequest <- queue.take
       curServerState <- serverState.get
       (rev, doc, ops) = curServerState
-      clientOpRequest <- queue.take
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
       concurrentOps <- {
         if clientRev > rev || rev - clientRev > ops.size
@@ -91,7 +94,8 @@ object WebSocketServer extends ZIOAppDefault {
         (doc, op) => ZIO.fromEither(applyOp(op)(doc)).mapError(new Throwable(_))
       }
       _ <- notifyClients(clientId, clientsOps)
-    } yield (rev + 1, newDoc, transformedClientOps :: ops)
+      _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
+    } yield ()
 }
 
 def applyOp(op: Operation)(text: Document): Either[OpError, Document] =
