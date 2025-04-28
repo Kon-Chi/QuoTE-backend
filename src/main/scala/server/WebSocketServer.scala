@@ -44,11 +44,10 @@ object WebSocketServer extends ZIOAppDefault {
   private def notifyClients(currentId: UUID, ops: List[Operation]): ZIO[Env, Throwable, Unit] = {
     for {
       queue <- ZIO.service[ClientOps]
-      refClients <- ZIO.service[RefClients]
-      clients <- refClients.get
+      clients <- ZIO.service[RefClients].flatMap(_.get)
       filteredClients = clients.filter { (id, _) => id != currentId }
       _ <- ZIO.foreach(filteredClients) {
-        (_, channel) => channel.send(
+        (id, channel) => channel.send(
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
         )
       }
@@ -84,19 +83,21 @@ object WebSocketServer extends ZIOAppDefault {
   override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
     queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
-    serverState <- Ref.make[ServerState](0, "", Nil) // I think we need init document fetching from db or smth
+    serverState <- Ref.make[ServerState](0, " ", Nil) // I think we need init document fetching from db or smth
 
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
     serverStateLayer = ZLayer.succeed(serverState)
 
-    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer ++ Server.default
+    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer
     _ <- opProcess // compiler complained on "Suspicious forward reference", so I've moved run function to the end of app
       .provideLayer(appLayer)
       .forever // whale suggested to wrap this in some exception-catcher (catchAll)
       .fork
-    serverProgram = Server.serve(routes(queue, clients))
-    exitCode <- serverProgram.provideLayer(appLayer).exitCode
+    exitCode <- Server
+      .serve(routes(queue, clients))
+      .provide(Server.defaultWith(_.binding("127.0.0.1", 8000)))
+      .exitCode
   } yield exitCode
 }
 
