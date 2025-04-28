@@ -2,6 +2,7 @@ package server
 
 import zio.http.*
 import zio.*
+import zio.redis.*
 
 import io.circe.*
 import io.circe.parser.*
@@ -11,6 +12,29 @@ import java.util.UUID
 
 import models.*
 import quote.ot.*
+//import server.ProtobufCodecSupplier
+import zio.redis.*
+import zio.schema.*
+import zio.schema.codec.*
+
+
+object StringCodecSupplier extends CodecSupplier {
+  def get[A: Schema]: BinaryCodec[A] = new BinaryCodec[A] {
+    def encode(value: A): Chunk[Byte] = Chunk.fromArray(value.toString.getBytes("UTF-8"))
+
+    def decode(chunk: Chunk[Byte]): Either[DecodeError, A] = {
+      try {
+        val str =new String(chunk.toArray, "UTF-8")
+        Right(str.asInstanceOf[A])
+      } catch {
+        case e: Exception => Left(DecodeError.ReadError(zio.Cause.empty, e.getMessage))
+      }
+    }
+  }
+}
+
+
+implicit val stringSchema: Schema[String] = Schema.primitive[String]
 
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
@@ -18,7 +42,7 @@ type ClientOps = Queue[ClientOperations]
 type Revision = Int
 type Document = String
 type ServerState = (Revision, Document, List[List[Operation]])
-type Env = ClientOps & RefClients & Ref[ServerState]
+type Env = ClientOps & RefClients & Ref[ServerState] & Redis
 
 object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
@@ -61,6 +85,7 @@ object WebSocketServer extends ZIOAppDefault:
 
   private val opProcess: ZIO[Env, Throwable, Unit] =
     for
+      redis <- ZIO.service[Redis]
       serverState <- ZIO.service[Ref[ServerState]]
       queue <- ZIO.service[ClientOps]
       clientOpRequest <- queue.take
@@ -69,8 +94,8 @@ object WebSocketServer extends ZIOAppDefault:
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
       concurrentOps <-
         if clientRev > rev || rev - clientRev > ops.size
-          then ZIO.fail(new Throwable("Invalid document revision"))
-          else ZIO.succeed(ops.take(rev - clientRev))
+        then ZIO.fail(new Throwable("Invalid document revision"))
+        else ZIO.succeed(ops.take(rev - clientRev))
       transformedClientOps =
         concurrentOps.foldLeft(clientsOps) {
           (acc, xs) => OperationalTransformation.transform(xs, acc)._2
@@ -80,6 +105,7 @@ object WebSocketServer extends ZIOAppDefault:
       }
       _ <- notifyClients(clientId, clientsOps)
       _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
+      _ <- redis.set("doc", doc.toString)
     yield ()
 
   override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for
@@ -90,11 +116,13 @@ object WebSocketServer extends ZIOAppDefault:
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
     serverStateLayer = ZLayer.succeed(serverState)
+    codecLayer = ZLayer.succeed[CodecSupplier](StringCodecSupplier)
+    redisLayer = Redis.local/pr
 
-    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer
-    _ <- opProcess // compiler complained on "Suspicious forward reference", so I've moved run function to the end of app
+    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer ++ codecLayer ++ redisLayer
+    _ <- opProcess
       .provideLayer(appLayer)
-      .forever // whale suggested to wrap this in some exception-catcher (catchAll)
+      .forever
       .fork
     exitCode <- Server
       .serve(routes(queue, clients))
@@ -105,9 +133,9 @@ object WebSocketServer extends ZIOAppDefault:
 
 def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
   case Insert(index, str) => if index >= text.length || index < 0
-    then Left("Failed to apply Insert operation")
-    else Right(text.take(index) + str + text.drop(index))
+  then Left("Failed to apply Insert operation")
+  else Right(text.take(index) + str + text.drop(index))
   case Delete(index, len) => if len > text.length || index < 0 || index >= text.length
-    then Left("Failed to apply Delete operation")
-    else Right(text.take(index) + text.drop(index + len))
+  then Left("Failed to apply Delete operation")
+  else Right(text.take(index) + text.drop(index + len))
 
