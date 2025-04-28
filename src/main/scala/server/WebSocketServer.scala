@@ -1,7 +1,5 @@
 package server
 
-import scala.util.{Random => sRandom} // only for generation test text
-
 import zio.http.*
 import zio.*
 
@@ -17,7 +15,10 @@ import quote.ot.*
 type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
 type ClientOps = Queue[ClientOperations]
-type Env = ClientOps & RefClients
+type Revision = Int
+type Document = String
+type ServerState = (Revision, Document, List[List[Operation]])
+type Env = ClientOps & RefClients & Ref[ServerState]
 
 object WebSocketServer extends ZIOAppDefault {
   private final val queueSize = 1000
@@ -70,27 +71,30 @@ object WebSocketServer extends ZIOAppDefault {
     exitCode <- serverProgram.provideLayer(appLayer).exitCode
   } yield exitCode
 
-  private def opProcess(queue: Queue[UserOperations], clients: RefClients): IO[IllegalArgumentException, String] =
+  private def opProcess(): ZIO[Env, Throwable, ServerState] =
     for {
-      queueSize <- queue.size
-      testText <- Ref.make((0 until queueSize).foldLeft("")((acc, _) =>
-        acc + sRandom.shuffle(List(" ", (sRandom.nextInt(26) + 'a').toChar.toString).head)))
-      taken <- queue.take
-      UserOperations(userId, ops) = taken
-      _ <- ZIO.foreach(ops) {
-        op => for {
-          curText <- testText.get
-          updText <- ZIO.fromEither(applyOp(op)(curText))
-            .mapError(errorMsg => new IllegalArgumentException(errorMsg))
-          _ <- testText.set(updText)
-        } yield ()
+      queue <- ZIO.service[ClientOps]
+      serverState <- ZIO.service[Ref[ServerState]]
+      curServerState <- serverState.get
+      (rev, doc, ops) = curServerState
+      clientOpRequest <- queue.take
+      ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
+      concurrentOps <- {
+        if clientRev > rev || rev - clientRev > ops.size
+        then ZIO.succeed(ops.take(rev - clientRev))
+        else ZIO.fail(new Throwable("Invalid document revision"))
       }
-      // _ <- notifyClients(userId, clients, ops)
-      updText <- testText.get
-    } yield updText
+      transformedClientOps <- ZIO.succeed(
+        concurrentOps.foldLeft(clientsOps) {(acc, xs) => transform(xs, acc)._2}
+      )
+      newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
+        (doc, op) => ZIO.fromEither(applyOp(op)(doc)).mapError(new Throwable(_))
+      }
+      _ <- notifyClients(clientId, clientsOps)
+    } yield (rev + 1, newDoc, transformedClientOps :: ops)
 }
 
-def applyOp(op: Operation)(text: String): Either[OpError, String] =
+def applyOp(op: Operation)(text: Document): Either[OpError, Document] =
   op match
     case Insert(index, str) =>
       if index >= text.length || index < 0 then Left("Failed to apply Insert operation")
@@ -99,3 +103,21 @@ def applyOp(op: Operation)(text: String): Either[OpError, String] =
       if len > text.length || index < 0 || index >= text.length then Left("Failed to apply Delete operation")
       else Right(text.take(index) + text.drop(index + len))
 
+def transform = transformList2 // to move into OT package
+
+def transformList1(o: Operation, ps: List[Operation]): (Operation, List[Operation]) =
+  ps match
+    case Nil => (o, Nil)
+    case p :: psTail =>
+      val (o1, p1) = OperationalTransformation.transform(o, p)
+      val (o2, ps1) = transformList1(o1, psTail)
+      (o2, p1 :: ps1)
+
+
+def transformList2(os: List[Operation], ps: List[Operation]): (List[Operation], List[Operation]) =
+  os match
+    case Nil => (Nil, ps)
+    case o :: osTail =>
+      val (o1,  ps1) = transformList1(o, ps)
+      val (os1, ps2) = transformList2(osTail, ps1)
+      (o1 :: os1, ps2)
