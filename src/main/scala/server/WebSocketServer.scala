@@ -62,6 +62,12 @@ object WebSocketServer extends ZIOAppDefault:
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
         )
       }
+      _ <- (clients
+        .find { (id, _) => id == currentId }
+        .map { (_, channel) => channel.send(Read(WebSocketFrame.Text("ack"))) })
+        match
+          case None    => ZIO.unit
+          case Some(x) => x
     yield ()
 
   private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): Routes[Any, Nothing] =
