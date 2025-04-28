@@ -20,29 +20,29 @@ type Document = String
 type ServerState = (Revision, Document, List[List[Operation]])
 type Env = ClientOps & RefClients & Ref[ServerState]
 
-object WebSocketServer extends ZIOAppDefault {
+object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
 
   private def socketApp(queue: ClientOps, clients: RefClients): WebSocketApp[Any] =
     Handler.webSocket { channel =>
-      for {
+      for
         clientId <- Random.nextUUID
         _ <- clients.update((clientId, channel) :: _)
 
         _ <- channel.receiveAll {
           case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
-            for {
+            for
               input <- ZIO.fromEither(decode[ClientInput](jsonString))
               _ <- queue.offer(input.toClientOperations(clientId))
-            } yield ()
+            yield ()
 
           case _ => ZIO.unit
         }
-      } yield ()
+      yield ()
     }
 
-  private def notifyClients(currentId: UUID, ops: List[Operation]): ZIO[Env, Throwable, Unit] = {
-    for {
+  private def notifyClients(currentId: UUID, ops: List[Operation]): ZIO[Env, Throwable, Unit] =
+    for
       queue <- ZIO.service[ClientOps]
       clients <- ZIO.service[RefClients].flatMap(_.get)
       filteredClients = clients.filter { (id, _) => id != currentId }
@@ -51,8 +51,8 @@ object WebSocketServer extends ZIOAppDefault {
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
         )
       }
-    } yield ()
-  }
+    yield ()
+
 
   private def routes(queue: ClientOps, clients: RefClients): Routes[Any, Nothing] =
     Routes(
@@ -60,7 +60,7 @@ object WebSocketServer extends ZIOAppDefault {
     )
 
   private val opProcess: ZIO[Env, Throwable, Unit] =
-    for {
+    for
       serverState <- ZIO.service[Ref[ServerState]]
       queue <- ZIO.service[ClientOps]
       clientOpRequest <- queue.take
@@ -78,9 +78,9 @@ object WebSocketServer extends ZIOAppDefault {
       }
       _ <- notifyClients(clientId, clientsOps)
       _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
-    } yield ()
+    yield ()
 
-  override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
+  override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for
     queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
     serverState <- Ref.make[ServerState](0, " ", Nil) // I think we need init document fetching from db or smth
@@ -98,8 +98,8 @@ object WebSocketServer extends ZIOAppDefault {
       .serve(routes(queue, clients))
       .provide(Server.defaultWith(_.binding("127.0.0.1", 8000)))
       .exitCode
-  } yield exitCode
-}
+  yield exitCode
+
 
 def applyOp(op: Operation, text: Document): Either[OpError, Document] =
   op match
