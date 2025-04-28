@@ -81,8 +81,8 @@ object WebSocketServer extends ZIOAppDefault {
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
       concurrentOps <- {
         if clientRev > rev || rev - clientRev > ops.size
-        then ZIO.succeed(ops.take(rev - clientRev))
-        else ZIO.fail(new Throwable("Invalid document revision"))
+        then ZIO.fail(new Throwable("Invalid document revision"))
+        else ZIO.succeed(ops.take(rev - clientRev))
       }
       transformedClientOps <- ZIO.succeed(
         concurrentOps.foldLeft(clientsOps) {(acc, xs) => transform(xs, acc)._2}
