@@ -47,11 +47,11 @@ object WebSocketServer extends ZIOAppDefault {
       refClients <- ZIO.service[RefClients]
       clients <- refClients.get
       filteredClients = clients.filter { (id, _) => id != currentId }
-      _ <- ZIO.foreach(filteredClients)(
+      _ <- ZIO.foreach(filteredClients) {
         (_, channel) => channel.send(
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
         )
-      )
+      }
     } yield ()
   }
 
@@ -74,7 +74,7 @@ object WebSocketServer extends ZIOAppDefault {
     exitCode <- serverProgram.provideLayer(appLayer).exitCode
   } yield exitCode
 
-  private def opProcess(): ZIO[Env, Throwable, Unit] =
+  private val opProcess: ZIO[Env, Throwable, Unit] =
     for {
       serverState <- ZIO.service[Ref[ServerState]]
       queue <- ZIO.service[ClientOps]
@@ -82,23 +82,21 @@ object WebSocketServer extends ZIOAppDefault {
       curServerState <- serverState.get
       (rev, doc, ops) = curServerState
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
-      concurrentOps <- {
+      concurrentOps <-
         if clientRev > rev || rev - clientRev > ops.size
-        then ZIO.fail(new Throwable("Invalid document revision"))
-        else ZIO.succeed(ops.take(rev - clientRev))
-      }
-      transformedClientOps <- ZIO.succeed(
+          then ZIO.fail(new Throwable("Invalid document revision"))
+          else ZIO.succeed(ops.take(rev - clientRev))
+      transformedClientOps =
         concurrentOps.foldLeft(clientsOps) {(acc, xs) => transform(xs, acc)._2}
-      )
       newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
-        (doc, op) => ZIO.fromEither(applyOp(op)(doc)).mapError(new Throwable(_))
+        (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_))
       }
       _ <- notifyClients(clientId, clientsOps)
       _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
     } yield ()
 }
 
-def applyOp(op: Operation)(text: Document): Either[OpError, Document] =
+def applyOp(op: Operation, text: Document): Either[OpError, Document] =
   op match
     case Insert(index, str) =>
       if index >= text.length || index < 0 then Left("Failed to apply Insert operation")
