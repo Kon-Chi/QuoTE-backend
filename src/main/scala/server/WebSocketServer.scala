@@ -60,20 +60,6 @@ object WebSocketServer extends ZIOAppDefault {
       Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
     )
 
-  override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
-    queue <- Queue.bounded[ClientOperations](queueSize)
-    clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
-    serverState <- Ref.make[ServerState](0, "", Nil) // I think we need init document fetching from db or smth
-
-    queueLayer = ZLayer.succeed(queue)
-    clientsLayer = ZLayer.succeed(clients)
-    serverStateLayer = ZLayer.succeed(serverState)
-
-    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer ++ Server.default
-    serverProgram = Server.serve(routes(queue, clients)) // to add concurrency with fibers
-    exitCode <- serverProgram.provideLayer(appLayer).exitCode
-  } yield exitCode
-
   private val opProcess: ZIO[Env, Throwable, Unit] =
     for {
       serverState <- ZIO.service[Ref[ServerState]]
@@ -94,6 +80,24 @@ object WebSocketServer extends ZIOAppDefault {
       _ <- notifyClients(clientId, clientsOps)
       _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
     } yield ()
+
+  override val run: ZIO[ZIOAppArgs & Scope, Nothing, ExitCode] = for {
+    queue <- Queue.bounded[ClientOperations](queueSize)
+    clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
+    serverState <- Ref.make[ServerState](0, "", Nil) // I think we need init document fetching from db or smth
+
+    queueLayer = ZLayer.succeed(queue)
+    clientsLayer = ZLayer.succeed(clients)
+    serverStateLayer = ZLayer.succeed(serverState)
+
+    appLayer = serverStateLayer ++ queueLayer ++ clientsLayer ++ Server.default
+    _ <- opProcess // compiler complained on "Suspicious forward reference", so I've moved run function to the end of app
+      .provideLayer(appLayer)
+      .forever // whale suggested to wrap this in some exception-catcher (catchAll)
+      .fork
+    serverProgram = Server.serve(routes(queue, clients))
+    exitCode <- serverProgram.provideLayer(appLayer).exitCode
+  } yield exitCode
 }
 
 def applyOp(op: Operation, text: Document): Either[OpError, Document] =
