@@ -1,5 +1,6 @@
 package server
 
+import zio.http.ChannelEvent.*
 import zio.http.*
 import zio.*
 
@@ -25,23 +26,28 @@ type Env = ClientOps & RefClients & Ref[ServerState]
 object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
 
-  private def socketApp(queue: ClientOps, clients: RefClients): WebSocketApp[Any] =
+  private def socketApp(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): WebSocketApp[Any] =
     Handler.webSocket { channel =>
       for
         clientId <- Random.nextUUID
         _ <- clients.update((clientId, channel) :: _)
 
         _ <- channel.receiveAll {
-          case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
+          case UserEventTriggered(UserEvent.HandshakeComplete) =>
+            serverState.get.flatMap { (_, doc, _) =>
+              channel.send(ChannelEvent.Read(WebSocketFrame.Text(doc.toString)))
+            }
+
+          case Read(WebSocketFrame.Text(jsonString)) =>
             for
               input <- ZIO.fromEither(decode[ClientInput](jsonString))
               _ <- queue.offer(input.toClientOperations(clientId))
             yield ()
 
-          case ChannelEvent.Unregistered | ChannelEvent.Read(WebSocketFrame.Close(_, _)) =>
+          case Unregistered | Read(WebSocketFrame.Close(_, _)) =>
             clients.update(_.filterNot(_._1 == clientId))
 
-          case _ => ZIO.unit
+          case x => Console.printLine(x.toString)
         }
       yield ()
     }
@@ -58,9 +64,9 @@ object WebSocketServer extends ZIOAppDefault:
       }
     yield ()
 
-  private def routes(queue: ClientOps, clients: RefClients): Routes[Any, Nothing] =
+  private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): Routes[Any, Nothing] =
     Routes(
-      Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
+      Method.GET / "updates" -> handler(socketApp(queue, clients, serverState).toResponse)
     )
 
   private val opProcess: ZIO[Env, Throwable, Unit] =
@@ -101,7 +107,7 @@ object WebSocketServer extends ZIOAppDefault:
       .forever // whale suggested to wrap this in some exception-catcher (catchAll)
       .fork
     exitCode <- Server
-      .serve(routes(queue, clients))
+      .serve(routes(queue, clients, serverState))
       .provide(Server.defaultWith(_.binding("127.0.0.1", 8000)))
       .exitCode
   yield exitCode
