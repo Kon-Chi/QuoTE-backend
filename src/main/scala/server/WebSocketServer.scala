@@ -62,8 +62,11 @@ object WebSocketServer extends ZIOAppDefault:
 
           case Read(WebSocketFrame.Text(jsonString)) =>
             for
+              _ <- Console.printLine("inputting...")
               input <- ZIO.fromEither(decode[ClientInput](jsonString))
+              _ <- Console.printLine(s"inputed, offering... ${input.toClientOperations(clientId)}").debug("Aboba?")
               _ <- queue.offer(input.toClientOperations(clientId))
+              _ <- Console.printLine(s"offered to ${queue}!")
             yield ()
 
           case Unregistered | Read(WebSocketFrame.Close(_, _)) =>
@@ -94,23 +97,30 @@ object WebSocketServer extends ZIOAppDefault:
 
   private def initialDocumentEnv(): UIO[DocumentEnv] = for
     state     <- Ref.make[DocumentState](0, PieceTable(""), List())
-    clients   <- Ref.make[Clients](List.empty[(UUID, WebSocketChannel)])
+    queue     <- Ref.make[Clients](List())
     clientOps <- Queue.bounded[ClientOperations](queueSize)
-    fiber     <- opProcess(state, clients, clientOps).fork
-  yield DocumentEnv(state, clients, clientOps, fiber)
+    fiber     <- opProcess(state, queue, clientOps)
+      .forever
+      .onInterrupt(ZIO.debug("OP PROCESS INTERRUPTED!"))
+      .forkDaemon
+  yield DocumentEnv(state, queue, clientOps, fiber)
 
   private def getOrCreateDocumentEnv(
     docId: DocumentId,
     refServerState: Ref[ServerState]
   ): UIO[DocumentEnv] = for
     serverState <- refServerState.get
-    maxDown     <- initialDocumentEnv()
-    docState    <- serverState.get(docId) match
-      case Some(a) => ZIO.succeed(a)
+    docEnv      <- serverState.get(docId) match
+      case Some(a) =>
+        Console.printLine(s"found $docId").catchAll(a => ZIO.unit) *>
+        ZIO.succeed(a)
       case None =>
-        for _ <- refServerState.update(_.updated(docId, maxDown))
+        for
+          _ <- Console.printLine(s"Did not find $docId").catchAll(a => ZIO.unit)
+          maxDown <- initialDocumentEnv()
+          _ <- refServerState.update(_.updated(docId, maxDown))
         yield maxDown
-  yield docState
+  yield docEnv
 
   private def routes(serverState: Ref[ServerState]) =
     Routes(
@@ -129,7 +139,9 @@ object WebSocketServer extends ZIOAppDefault:
   ): Task[Unit] =
     for
       // redis <- ZIO.service[Redis]
-      clientOpRequest <- queue.take
+      _ <- ZIO.debug(s"taking... from ${queue}")
+      clientOpRequest <- queue.take.onInterrupt(ZIO.debug("INTERRUPTED WHILE WAITING!"))
+      _ <- ZIO.debug(s"taken $clientOpRequest !")
       curDocumentState <- documentState.get
       (rev, doc, ops) = curDocumentState
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
@@ -155,11 +167,13 @@ object WebSocketServer extends ZIOAppDefault:
 
     serverState <- Ref.make[ServerState](Map())
 
-    exitCode <- Server
+    _ <- ZIO.never.forkDaemon
+
+    _ <- Server
       .serve(routes(serverState))
       .provide(Server.defaultWith(_.binding("127.0.0.1", 8080)))
-      .exitCode
-  yield exitCode
+      .zipPar(ZIO.never)
+  yield ()
 
 def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
   case Insert(index, str) => if index > text.length || index < 0
