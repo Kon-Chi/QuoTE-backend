@@ -135,7 +135,7 @@ object WebSocketServer extends ZIOAppDefault:
     )
 
     exitCode <- Server
-      .serve(routes(queue, clients))
+      .serve(routes(queue, clients, serverState))
       .provide(Server.defaultWith(_.binding("127.0.0.1", 8080)))
       .exitCode
   yield exitCode
