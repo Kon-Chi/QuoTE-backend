@@ -116,7 +116,6 @@ object WebSocketServer extends ZIOAppDefault:
       }
       _ <- notifyClients(clientId, clientsOps)
       _ <- serverState.set(rev + 1, newDoc, transformedClientOps :: ops)
-      _ <- redis.set("doc", doc.toString)
     yield ()
 
   override val run = for
@@ -131,7 +130,6 @@ object WebSocketServer extends ZIOAppDefault:
     codecLayer = ZLayer.succeed[CodecSupplier](ProtobufCodecSupplier)
     redisLayer = Redis.local
 
-    appLayer =  codecLayer ++ serverStateLayer ++ queueLayer ++ clientsLayer ++ redisLayer
     _ <- opProcess.forever.fork.provide(
       codecLayer,
       redisLayer,
