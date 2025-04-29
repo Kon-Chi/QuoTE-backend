@@ -39,7 +39,12 @@ type Env = ClientOps & RefClients & Ref[ServerState] & Redis
 object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
 
-  private def socketApp(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): WebSocketApp[Any] =
+  private def socketApp(
+                         queue: ClientOps,
+                         clients: RefClients,
+                         serverState: Ref[ServerState],
+                         docId: String
+                       ): WebSocketApp[Any] =
     Handler.webSocket { channel =>
       for
         clientId <- Random.nextUUID
@@ -83,11 +88,12 @@ object WebSocketServer extends ZIOAppDefault:
           case Some(x) => x
     yield ()
 
-  private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): Routes[Any, Nothing] =
+  private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]) =
     Routes(
-      Method.GET / "updates" -> handler(socketApp(queue, clients, serverState).toResponse)
+      Method.GET / "updates" / string("docId") -> handler (
+        (docId: String, _: Request) => socketApp(queue, clients, serverState, docId).toResponse
+      )
     )
-
   private val opProcess: ZIO[Env, Throwable, Unit] =
     for
       redis <- ZIO.service[Redis]
