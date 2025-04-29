@@ -1,5 +1,6 @@
 package server
 
+import zio.http.ChannelEvent.*
 import zio.http.*
 import zio.*
 import zio.redis.*
@@ -10,8 +11,10 @@ import io.circe.syntax.*
 
 import java.util.UUID
 
-import models.*
 import quote.ot.*
+import pieceTable.*
+
+import models.*
 
 import zio.redis.*
 import zio.schema.*
@@ -29,27 +32,35 @@ type OpError = String
 type RefClients = Ref[List[(UUID, WebSocketChannel)]]
 type ClientOps = Queue[ClientOperations]
 type Revision = Int
-type Document = String
+type Document = PieceTable
 type ServerState = (Revision, Document, List[List[Operation]])
 type Env = ClientOps & RefClients & Ref[ServerState] & Redis
 
 object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
 
-  private def socketApp(queue: ClientOps, clients: RefClients): WebSocketApp[Any] =
+  private def socketApp(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): WebSocketApp[Any] =
     Handler.webSocket { channel =>
       for
         clientId <- Random.nextUUID
         _ <- clients.update((clientId, channel) :: _)
 
         _ <- channel.receiveAll {
-          case ChannelEvent.Read(WebSocketFrame.Text(jsonString)) =>
+          case UserEventTriggered(UserEvent.HandshakeComplete) =>
+            serverState.get.flatMap { (_, doc, _) =>
+              channel.send(ChannelEvent.Read(WebSocketFrame.Text(doc.toString)))
+            }
+
+          case Read(WebSocketFrame.Text(jsonString)) =>
             for
               input <- ZIO.fromEither(decode[ClientInput](jsonString))
               _ <- queue.offer(input.toClientOperations(clientId))
             yield ()
 
-          case _ => ZIO.unit
+          case Unregistered | Read(WebSocketFrame.Close(_, _)) =>
+            clients.update(_.filterNot(_._1 == clientId))
+
+          case x => Console.printLine(x.toString)
         }
       yield ()
     }
@@ -64,12 +75,17 @@ object WebSocketServer extends ZIOAppDefault:
           ChannelEvent.Read(WebSocketFrame.Text(ops.asJson.noSpaces))
         )
       }
+      _ <- (clients
+        .find { (id, _) => id == currentId }
+        .map { (_, channel) => channel.send(Read(WebSocketFrame.Text("ack"))) })
+        match
+          case None    => ZIO.unit
+          case Some(x) => x
     yield ()
 
-
-  private def routes(queue: ClientOps, clients: RefClients): Routes[Any, Nothing] =
+  private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]): Routes[Any, Nothing] =
     Routes(
-      Method.GET / "updates" -> handler(socketApp(queue, clients).toResponse)
+      Method.GET / "updates" -> handler(socketApp(queue, clients, serverState).toResponse)
     )
 
   private val opProcess: ZIO[Env, Throwable, Unit] =
@@ -100,7 +116,8 @@ object WebSocketServer extends ZIOAppDefault:
   override val run = for
     queue <- Queue.bounded[ClientOperations](queueSize)
     clients <- Ref.make(List.empty[(UUID, WebSocketChannel)])
-    serverState <- Ref.make[ServerState](0, " ", Nil)
+
+    serverState <- Ref.make[ServerState](0, PieceTable(""), Nil) // I think we need init document fetching from db or smth
 
     queueLayer = ZLayer.succeed(queue)
     clientsLayer = ZLayer.succeed(clients)
@@ -123,6 +140,11 @@ object WebSocketServer extends ZIOAppDefault:
       .exitCode
   yield exitCode
 
-
-def applyOp(op: Operation, text: Document): Either[OpError, Document] = ???
+def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
+  case Insert(index, str) => if index > text.length || index < 0
+    then Left("Failed to apply Insert operation")
+    else Right({ text.insert(index, str); text })
+  case Delete(index, len) => if len - index > text.length || index < 0 || index > text.length
+    then Left("Failed to apply Delete operation")
+    else Right({ text.delete(index, len); text })
 
