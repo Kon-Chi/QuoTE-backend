@@ -1,9 +1,11 @@
 package server
 
-import zio.http.ChannelEvent.*
-import zio.http.*
 import zio.*
+import zio.http.*
+import zio.http.ChannelEvent.*
 import zio.redis.*
+import zio.schema.*
+import zio.schema.codec.*
 
 import io.circe.*
 import io.circe.parser.*
@@ -16,15 +18,9 @@ import pieceTable.*
 
 import models.*
 
-import zio.redis.*
-import zio.schema.*
-import zio.schema.codec.*
-
-
 object ProtobufCodecSupplier extends CodecSupplier {
   def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 }
-
 
 implicit val stringSchema: Schema[String] = Schema.primitive[String]
 
