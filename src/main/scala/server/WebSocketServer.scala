@@ -4,27 +4,22 @@ import zio.http.ChannelEvent.*
 import zio.http.*
 import zio.*
 import zio.redis.*
-
+import zio.schema.*
+import zio.schema.codec.*
+import zio.http.Header.{AccessControlAllowOrigin, Origin}
+import zio.http.Middleware.{CorsConfig, cors}
 import io.circe.*
 import io.circe.parser.*
 import io.circe.syntax.*
 
 import java.util.UUID
-
 import quote.ot.*
 import pieceTable.*
-
 import models.*
-
-import zio.redis.*
-import zio.schema.*
-import zio.schema.codec.*
-
 
 object ProtobufCodecSupplier extends CodecSupplier {
   def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
 }
-
 
 implicit val stringSchema: Schema[String] = Schema.primitive[String]
 
@@ -88,6 +83,10 @@ object WebSocketServer extends ZIOAppDefault:
           case Some(x) => x
     yield ()
 
+  private val config: CorsConfig =
+    CorsConfig(
+      allowedOrigin = _ => Some(AccessControlAllowOrigin.All)
+    )
   private def routes(queue: ClientOps, clients: RefClients, serverState: Ref[ServerState]) =
     Routes(
       Method.GET / "updates" / string("docId") -> handler (
