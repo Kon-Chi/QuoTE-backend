@@ -87,7 +87,7 @@ object WebSocketServer extends ZIOAppDefault:
       (id, channel) => channel
         .send(Read(WebSocketFrame.Text(ops.asJson.noSpaces)))
         .debug(s"sent operations to $id")
-    }
+    }.debug("sending ops to clients")
     _ <- clients
       .find { (id, _) => id == currentId }
       .map { (id, channel) => channel
@@ -105,8 +105,8 @@ object WebSocketServer extends ZIOAppDefault:
     clientOps <- Queue.bounded[ClientOperations](queueSize)
     fiber     <- opProcess(state, queue, clientOps)
       .forever
-      .onInterrupt(ZIO.debug("OP PROCESS INTERRUPTED!"))
       .forkDaemon
+      .onInterrupt(ZIO.debug("OP PROCESS INTERRUPTED!"))
   yield DocumentEnv(state, queue, clientOps, fiber)
 
   private def getOrCreateDocumentEnv(
@@ -151,7 +151,8 @@ object WebSocketServer extends ZIOAppDefault:
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
       concurrentOps <- (
         if clientRev > rev || rev - clientRev > ops.size
-        then ZIO.fail(new Throwable("Invalid document revision"))
+        then ZIO.debug(s"Invalid document revision: $rev client: $clientRev" ) *>
+             ZIO.fail(new Throwable("Invalid document revision"))
         else ZIO.succeed(ops.take(rev - clientRev))
       ).debug("concurrentOps")
       transformedClientOps =
@@ -159,10 +160,10 @@ object WebSocketServer extends ZIOAppDefault:
           (acc, xs) => OperationalTransformation.transform(xs, acc)._2
         }
       newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
-        (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_))
-      }
+        (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_)).debug(s"applied $op to $doc")
+      }.debug("newDoc")
       clients <- refClients.get
-      _ <- notifyClients(clients, clientId, clientsOps)
+      _ <- notifyClients(clients, clientId, clientsOps).debug("notifing")
       _ <- documentState.set(rev + 1, newDoc, transformedClientOps :: ops)
     yield ()
 
