@@ -64,17 +64,14 @@ object WebSocketServer extends ZIOAppDefault:
 
           case Read(WebSocketFrame.Text(jsonString)) =>
             for
-              _ <- Console.printLine("inputting...")
-              input <- ZIO.fromEither(decode[ClientInput](jsonString))
-              _ <- Console.printLine(s"inputed, offering... ${input.toClientOperations(clientId)}").debug("Aboba?")
-              _ <- queue.offer(input.toClientOperations(clientId))
-              _ <- Console.printLine(s"offered to ${queue}!")
+              input <- ZIO.fromEither(decode[ClientInput](jsonString)).debug(s"decoding $jsonString")
+              _ <- queue.offer(input.toClientOperations(clientId)).debug(s"offering $input")
             yield ()
 
           case Unregistered | Read(WebSocketFrame.Close(_, _)) =>
             clients.update(_.filterNot(_._1 == clientId))
 
-          case x => Console.printLine(x.toString)
+          case x => ZIO.debug(s"received unexpeced ${x.toString}")
         }
       yield ()
     }
@@ -84,14 +81,19 @@ object WebSocketServer extends ZIOAppDefault:
     currentId: UUID,
     ops: List[Operation],
   ): Task[Unit] = for
-    _ <- Console.printLine(s"nofifying ${currentId.toString}")
+    _ <- ZIO.debug(s"notifying $currentId")
     filteredClients = clients.filter { (id, _) => id != currentId }
     _ <- ZIO.foreach(filteredClients) {
-      (id, channel) => channel.send(Read(WebSocketFrame.Text(ops.asJson.noSpaces)))
+      (id, channel) => channel
+        .send(Read(WebSocketFrame.Text(ops.asJson.noSpaces)))
+        .debug(s"sent operations to $id")
     }
-    _ <- (clients
+    _ <- clients
       .find { (id, _) => id == currentId }
-      .map { (_, channel) => channel.send(Read(WebSocketFrame.Text("ack"))) })
+      .map { (id, channel) => channel
+        .send(Read(WebSocketFrame.Text("ack")))
+        .debug(s"sent ack to $id")
+      }
       match
         case None    => ZIO.unit
         case Some(x) => x
