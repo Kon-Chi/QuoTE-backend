@@ -1,6 +1,12 @@
 ThisBuild / version := "0.1.0-SNAPSHOT"
 
+ThisBuild / packageName := "quote-server"
+
 ThisBuild / scalaVersion := "3.3.5"
+
+ThisBuild / dockerBaseImage := "eclipse-temurin:17-jre-jammy"
+
+ThisBuild / dockerExposedPorts := Seq(8080)
 
 val zioHttpVersion = "3.2.0"
 val zioVersion = "2.1.17"
@@ -12,6 +18,8 @@ lazy val piece_table = RootProject(uri("https://github.com/Kon-Chi/PieceTable.gi
 lazy val root = (project in file("."))
   .dependsOn(quote_ot)
   .dependsOn(piece_table)
+  .enablePlugins(JavaAppPackaging)
+  .enablePlugins(DockerPlugin)
   .settings(
     name := "QuoTE",
     libraryDependencies ++= Seq(
@@ -24,4 +32,3 @@ lazy val root = (project in file("."))
       "io.circe" %% "circe-parser" % circeVersion,
     )
   )
-
