@@ -178,7 +178,7 @@ object WebSocketServer extends ZIOAppDefault:
 
     _ <- Server
       .serve(routes(serverState))
-      .provide(Server.defaultWith(_.binding("127.0.0.1", 8080)))
+      .provide(Server.defaultWith(_.binding("0.0.0.0", 8080)))
       .zipPar(ZIO.never)
   yield ()
 
