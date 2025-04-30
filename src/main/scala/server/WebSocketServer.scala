@@ -115,21 +115,16 @@ object WebSocketServer extends ZIOAppDefault:
   ): UIO[DocumentEnv] = for
     serverState <- refServerState.get
     docEnv      <- serverState.get(docId) match
-      case Some(a) =>
-        Console.printLine(s"found $docId").catchAll(a => ZIO.unit) *>
-        ZIO.succeed(a)
+      case Some(a) => ZIO.succeed(a)
       case None =>
         for
-          _ <- Console.printLine(s"Did not find $docId").catchAll(a => ZIO.unit)
           maxDown <- initialDocumentEnv()
           _ <- refServerState.update(_.updated(docId, maxDown))
         yield maxDown
   yield docEnv
 
   private val config: CorsConfig =
-    CorsConfig(
-      allowedOrigin = _ => Some(AccessControlAllowOrigin.All)
-    )
+    CorsConfig(allowedOrigin = _ => Some(AccessControlAllowOrigin.All))
 
   private def routes(serverState: Ref[ServerState]) =
     Routes(
@@ -161,7 +156,7 @@ object WebSocketServer extends ZIOAppDefault:
       transformedClientOps =
         concurrentOps.foldLeft(clientsOps) {
           (acc, xs) => OperationalTransformation.transform(xs, acc)._2
-        }
+        }.debug("transformedClintOps")
       newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
         (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_))
       }
