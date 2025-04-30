@@ -177,7 +177,7 @@ object WebSocketServer extends ZIOAppDefault:
   override val run = for
     serverState <- Ref.make[ServerState](Map())
     codecLayer = ZLayer.succeed[CodecSupplier](ProtobufCodecSupplier)
-    redisLayer = ZLayer.succeed(RedisConfig("redis", 6379)) >>> Redis.local
+    redisLayer = Redis.local
     redis <- getRedis.provide(redisLayer, codecLayer)
 
     _ <- ZIO.never.forkDaemon
