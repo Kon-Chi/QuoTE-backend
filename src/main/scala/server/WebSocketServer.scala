@@ -6,8 +6,11 @@ import zio.*
 import zio.redis.*
 import zio.schema.*
 import zio.schema.codec.*
-import zio.http.Header.{AccessControlAllowOrigin, Origin}
-import zio.http.Middleware.{CorsConfig, cors}
+
+// cors imports
+import zio.http.Header.AccessControlAllowOrigin
+import zio.http.Middleware.CorsConfig
+
 import io.circe.*
 import io.circe.parser.*
 import io.circe.syntax.*
