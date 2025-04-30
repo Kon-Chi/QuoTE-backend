@@ -149,14 +149,15 @@ object WebSocketServer extends ZIOAppDefault:
       curDocumentState <- documentState.get
       (rev, doc, ops) = curDocumentState
       ClientOperations(clientId, clientRev, clientsOps) = clientOpRequest
-      concurrentOps <-
+      concurrentOps <- (
         if clientRev > rev || rev - clientRev > ops.size
         then ZIO.fail(new Throwable("Invalid document revision"))
         else ZIO.succeed(ops.take(rev - clientRev))
+      ).debug("concurrentOps")
       transformedClientOps =
         concurrentOps.foldLeft(clientsOps) {
           (acc, xs) => OperationalTransformation.transform(xs, acc)._2
-        }.debug("transformedClintOps")
+        }
       newDoc <- ZIO.foldLeft(transformedClientOps)(doc) {
         (doc, op) => ZIO.fromEither(applyOp(op, doc)).mapError(new Throwable(_))
       }
