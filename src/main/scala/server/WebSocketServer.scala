@@ -7,15 +7,17 @@ import zio.redis.*
 import zio.schema.*
 import zio.schema.codec.*
 
+// cors imports
+import zio.http.Header.AccessControlAllowOrigin
+import zio.http.Middleware.CorsConfig
+
 import io.circe.*
 import io.circe.parser.*
 import io.circe.syntax.*
 
 import java.util.UUID
-
 import quote.ot.*
 import pieceTable.*
-
 import models.*
 
 object ProtobufCodecSupplier extends CodecSupplier {
@@ -121,6 +123,11 @@ object WebSocketServer extends ZIOAppDefault:
           _ <- refServerState.update(_.updated(docId, maxDown))
         yield maxDown
   yield docEnv
+
+  private val config: CorsConfig =
+    CorsConfig(
+      allowedOrigin = _ => Some(AccessControlAllowOrigin.All)
+    )
 
   private def routes(serverState: Ref[ServerState]) =
     Routes(
