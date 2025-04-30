@@ -186,7 +186,7 @@ def applyOp(op: Operation, text: Document): Either[OpError, Document] = op match
   case Insert(index, str) => if index > text.length || index < 0
     then Left("Failed to apply Insert operation")
     else Right({ text.insert(index, str); text })
-  case Delete(index, len) => if len - index > text.length || index < 0 || index > text.length
+  case Delete(index, str) => if str.length - index > text.length || index < 0 || index > text.length
     then Left("Failed to apply Delete operation")
-    else Right({ text.delete(index, len); text })
+    else Right({ text.delete(index, str.length); text })
 
