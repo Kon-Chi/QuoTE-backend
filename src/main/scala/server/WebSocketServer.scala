@@ -6,7 +6,6 @@ import zio.http.ChannelEvent.*
 import zio.redis.*
 import zio.schema.*
 import zio.schema.codec.*
-
 // cors imports
 import zio.http.Header.AccessControlAllowOrigin
 import zio.http.Middleware.CorsConfig
@@ -20,9 +19,8 @@ import quote.ot.*
 import pieceTable.*
 import models.*
 
-object ProtobufCodecSupplier extends CodecSupplier {
+object ProtobufCodecSupplier extends CodecSupplier:
   def get[A: Schema]: BinaryCodec[A] = ProtobufCodec.protobufCodec
-}
 
 implicit val stringSchema: Schema[String] = Schema.primitive[String]
 
@@ -48,7 +46,7 @@ case class ClientGreeting(text: String, revision: Revision) derives Codec.AsObje
 object WebSocketServer extends ZIOAppDefault:
   private final val queueSize = 1000
 
-  private def socketApp(documentEnv: DocumentEnv): WebSocketApp[Any] =
+  private def socketApp(docId: String, redis: Redis, documentEnv: DocumentEnv): WebSocketApp[Any] =
     val DocumentEnv(docState, clients, queue, fiber) = documentEnv
     Handler.webSocket { channel =>
       for
@@ -62,14 +60,17 @@ object WebSocketServer extends ZIOAppDefault:
               channel.send(Read(WebSocketFrame.Text(greeting.asJson.noSpaces)))
             }
 
-          case Read(WebSocketFrame.Text(jsonString)) =>
-            for
-              input <- ZIO.fromEither(decode[ClientInput](jsonString)).debug(s"decoding $jsonString")
-              _ <- queue.offer(input.toClientOperations(clientId)).debug(s"offering $input")
-            yield ()
+          case Read(WebSocketFrame.Text(jsonString)) => for
+            input <- ZIO.fromEither(decode[ClientInput](jsonString)).debug(s"decoding $jsonString")
+            _ <- queue.offer(input.toClientOperations(clientId)).debug(s"offering $input")
+          yield ()
 
-          case Unregistered | Read(WebSocketFrame.Close(_, _)) =>
-            clients.update(_.filterNot(_._1 == clientId))
+          case Unregistered | Read(WebSocketFrame.Close(_, _)) => for
+            _ <- clients.update(_.filterNot(_._1 == clientId))
+            state <- docState.get
+            (_, doc, _) = state
+            _ <- redis.set(docId, doc.toString)
+          yield ()
 
           case x => ZIO.debug(s"received unexpeced ${x.toString}")
         }
@@ -99,7 +100,11 @@ object WebSocketServer extends ZIOAppDefault:
         case Some(x) => x
   yield ()
 
-  private def initialDocumentEnv(): UIO[DocumentEnv] = for
+  private def initialDocumentEnv(docId: DocumentId, redis: Redis): UIO[DocumentEnv] = for
+    mDoc <- redis.get(docId).returning[String].orElse(ZIO.succeed(Some("")))
+    doc = mDoc match
+      case None => ""
+      case Some(x) => x
     state     <- Ref.make[DocumentState](0, PieceTable(""), List())
     queue     <- Ref.make[Clients](List())
     clientOps <- Queue.bounded[ClientOperations](queueSize)
@@ -111,14 +116,15 @@ object WebSocketServer extends ZIOAppDefault:
 
   private def getOrCreateDocumentEnv(
     docId: DocumentId,
-    refServerState: Ref[ServerState]
+    redis: Redis,
+    refServerState: Ref[ServerState],
   ): UIO[DocumentEnv] = for
     serverState <- refServerState.get
     docEnv      <- serverState.get(docId) match
       case Some(a) => ZIO.succeed(a)
       case None =>
         for
-          maxDown <- initialDocumentEnv()
+          maxDown <- initialDocumentEnv(docId, redis)
           _ <- refServerState.update(_.updated(docId, maxDown))
         yield maxDown
   yield docEnv
@@ -126,12 +132,12 @@ object WebSocketServer extends ZIOAppDefault:
   private val config: CorsConfig =
     CorsConfig(allowedOrigin = _ => Some(AccessControlAllowOrigin.All))
 
-  private def routes(serverState: Ref[ServerState]) =
+  private def routes(redis: Redis, serverState: Ref[ServerState]) =
     Routes(
       Method.GET / "updates" / string("docId") -> handler { (docId: DocumentId, _: Request) =>
         for
-          state <- getOrCreateDocumentEnv(docId, serverState)
-          app <- socketApp(state).toResponse
+          state <- getOrCreateDocumentEnv(docId, redis, serverState)
+          app <- socketApp(docId, redis, state).toResponse
         yield app
       }
     )
@@ -142,7 +148,6 @@ object WebSocketServer extends ZIOAppDefault:
     queue: ClientOps,
   ): Task[Unit] =
     for
-      // redis <- ZIO.service[Redis]
       _ <- ZIO.debug(s"taking... from ${queue}")
       clientOpRequest <- queue.take.onInterrupt(ZIO.debug("INTERRUPTED WHILE WAITING!"))
       _ <- ZIO.debug(s"taken $clientOpRequest !")
@@ -167,16 +172,18 @@ object WebSocketServer extends ZIOAppDefault:
       _ <- documentState.set(rev + 1, newDoc, transformedClientOps :: ops)
     yield ()
 
-  override val run = for
-    // codecLayer = ZLayer.succeed[CodecSupplier](ProtobufCodecSupplier)
-    // redisLayer = Redis.local
+  private val getRedis: ZIO[Redis, Throwable, Redis] = ZIO.service[Redis]
 
+  override val run = for
     serverState <- Ref.make[ServerState](Map())
+    codecLayer = ZLayer.succeed[CodecSupplier](ProtobufCodecSupplier)
+    redisLayer = ZLayer.succeed(RedisConfig("redis", 6379)) >>> Redis.local
+    redis <- getRedis.provide(redisLayer, codecLayer)
 
     _ <- ZIO.never.forkDaemon
 
     _ <- Server
-      .serve(routes(serverState))
+      .serve(routes(redis, serverState))
       .provide(Server.defaultWith(_.binding("0.0.0.0", 8080)))
       .zipPar(ZIO.never)
   yield ()
